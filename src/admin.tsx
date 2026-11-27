@@ -1,14 +1,23 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { bucket, db, inspect, probe, upload } from './data'
+import { bucket, db, fileFamily, inspect, probe, upload } from './data'
 import { isVisual, kinds, labels, message, type Category, type Media, type Profile, type Settings } from './model'
 const roles = {admin:'管理者',editor:'編集者',viewer:'閲覧者'}
 export {roles}
 const check = ({error}:{error:unknown}) => { if (error) throw error }
-export function Editor({item,categories,actor,done,cancel}:{item:Media | null; categories:Category[];actor:Profile;done:()=>void;cancel:()=>void}) {
+export function Editor({item,categories,actor,nextOrder,done,cancel}:{item:Media | null; categories:Category[];actor:Profile;nextOrder:number;done:()=>void;cancel:()=>void}) {
   const [kind,setKind] = useState(item?.media_type ?? 'bgm')
   const [busy,setBusy] = useState(false)
   const [progress,setProgress] = useState(0)
   const [error,setError] = useState('')
+  const [title,setTitle] = useState(item?.title ?? '')
+  function chooseFile(file?:File) {
+    if(!file)return
+    const family=fileFamily(file.name)
+    if(family==='video' || family==='image')setKind(family)
+    if(family==='audio')setKind(value=>value==='video' || value==='image'?'bgm':value)
+    setTitle(value=>value || file.name.replace(/\.[^.]+$/,'').slice(0,120))
+    setError('')
+  }
   async function save(e:FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const f = new FormData(e.currentTarget)
@@ -51,13 +60,14 @@ export function Editor({item,categories,actor,done,cancel}:{item:Media | null; c
   return <dialog open className="panel dialog"><form onSubmit={save}>
     <h2>{item?'メディア編集':'メディア登録'}</h2>
     <fieldset disabled={busy} className="fields">
-      <label>表示名<input name="title" required maxLength={120} defaultValue={item?.title}/></label>
+      <label>表示名<input name="title" required maxLength={120} value={title} onChange={e=>setTitle(e.target.value)}/></label>
       <label>種別<select value={kind} disabled={!!item} onChange={e=>setKind(e.target.value as Media['media_type'])}>{kinds.map(k=><option key={k} value={k}>{labels[k]}</option>)}</select></label>
-      {!item && <label className="wide">ファイル（50 MBまで）<input name="file" type="file" required accept=".mp3,.wav,.m4a,.mp4,.webm,.png,.jpg,.jpeg,.webp"/></label>}
+      {!item && <label className="wide">ファイル（50 MBまで）<input name="file" type="file" required accept=".mp3,.wav,.m4a,.mp4,.webm,.png,.jpg,.jpeg,.webp" onChange={e=>chooseFile(e.target.files?.[0])}/></label>}
+      {!item && kind==='video' && <p className="wide">MP4は映像H.264・音声AACを推奨します。</p>}
       <label>カテゴリ<select name="category" defaultValue={item?.category_id ?? ''}><option value="">未分類</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
       <label>表示色<input name="color" type="color" defaultValue={item?.color ?? '#65c5b1'}/></label>
       <label>音量（%）<input name="volume" type="number" min="0" max="100" defaultValue={item?.volume ?? 100} required/></label>
-      <label>並び順<input name="order" type="number" defaultValue={item?.sort_order ?? 0} required/></label>
+      <label>並び順<input name="order" type="number" defaultValue={item?.sort_order ?? nextOrder} required/></label>
       <label>フェードイン（ms）<input name="fadeIn" type="number" min="0" max="30000" defaultValue={item?.fade_in_ms ?? 0} required/></label>
       <label>フェードアウト（ms）<input name="fadeOut" type="number" min="0" max="30000" defaultValue={item?.fade_out_ms ?? 500} required/></label>
       <label>終了後<select name="end" defaultValue={item?.end_action ?? 'standby'}><option value="standby">待機画面</option><option value="hold">最終フレーム保持</option><option value="black">黒画面</option></select></label>
@@ -116,4 +126,46 @@ export function Administration({actor,settings,media,categories,refresh,close}:{
     </form>
     </fieldset><p role="status">{status}</p><button disabled={busy} onClick={close}>閉じる</button>
   </dialog>
+}
+
+export function Reorder({media,done,cancel}:{media:Media[];done:()=>Promise<void>;cancel:()=>void}) {
+  const [original]=useState(()=>media.map(m=>m.id))
+  const [items,setItems]=useState(()=>[...media])
+  const [busy,setBusy]=useState(false)
+  const [error,setError]=useState('')
+  function move(index:number,step:number) {
+    setItems(current=>{
+      const next=[...current]
+      const target=index+step
+      if(target<0 || target>=next.length)return current
+      const item=next[index]
+      next[index]=next[target]
+      next[target]=item
+      return next
+    })
+  }
+  async function save() {
+    setBusy(true)
+    setError('')
+    try {
+      check(await db!.rpc('reorder_media',{original_ids:original,ordered_ids:items.map(m=>m.id)}))
+      await done()
+    } catch(e) { setError(message(e)) }
+    finally { setBusy(false) }
+  }
+  const changed=items.some((item,index)=>item.id!==original[index])
+  return <section aria-label="並べ替え" className="reorder">
+    <div className="sectionHead"><h2>メディアの並べ替え</h2><div className="row">
+      <button disabled={busy} onClick={cancel}>キャンセル</button>
+      <button className="primary" disabled={!changed || busy} onClick={()=>void save()}>{busy?'保存中…':'順番を保存'}</button>
+    </div></div>
+    <p>「上へ」「下へ」で順番を変えます。保存すると全員の一覧に反映されます。</p>
+    {error && <p role="alert" className="alert">{error}</p>}
+    <ol>{items.map((item,i)=><li key={item.id}>
+      <span className="order-index">{i+1}</span>
+      <span className="order-name"><small>{labels[item.media_type]}</small><strong>{item.title}</strong></span>
+      <div className="row"><button disabled={busy || i===0} aria-label={item.title+'を上へ'} onClick={()=>move(i,-1)}>上へ</button>
+        <button disabled={busy || i===items.length-1} aria-label={item.title+'を下へ'} onClick={()=>move(i,1)}>下へ</button></div>
+    </li>)}</ol>
+  </section>
 }
