@@ -23,6 +23,9 @@ try {
     create publication supabase_realtime;
   `)
   await db.exec(await readFile(new URL('../supabase/migrations/202611270001_av.sql',import.meta.url),'utf8'))
+  await db.exec(await readFile(new URL('../supabase/migrations/202611270002_shared_access.sql',import.meta.url),'utf8'))
+  await db.exec(await readFile(new URL('../supabase/migrations/202611270003_m4a.sql',import.meta.url),'utf8'))
+  assert.ok((await db.query("select allowed_mime_types from storage.buckets where id='av-media'")).rows[0].allowed_mime_types.includes('audio/mp4'))
   await db.exec(`
     insert into auth.users values ('${admin}'),('${editor}'),('${viewer}');
     insert into public.profiles(user_id,display_name,role) values ('${admin}','admin','admin'),('${editor}','editor','editor'),('${viewer}','viewer','viewer');
@@ -33,7 +36,7 @@ try {
   await assert.rejects(db.query('select * from public.media'))
   assert.equal(await count('storage.objects'),0)
   await assume('authenticated',editor)
-  await db.exec(`insert into storage.objects values ('av-media','${dir}/original.wav'); insert into public.media(id,title,media_type,storage_path,file_name,mime_type,file_size,checksum) values ('${item}','Bell','effect','${dir}/original.wav','Bell.wav','audio/wav',1024,repeat('a',64));`)
+  await db.exec(`insert into storage.objects values ('av-media','${dir}/original.m4a'); insert into public.media(id,title,media_type,storage_path,file_name,mime_type,file_size,checksum) values ('${item}','Bell','effect','${dir}/original.m4a','Bell.m4a','audio/mp4',1024,repeat('a',64));`)
   await assert.rejects(db.query("select public.manage_member($1,'viewer')",[admin]))
   assert.equal((await db.query('delete from storage.objects returning name')).rows.length,0)
   await db.exec("update public.media set title='Desk bell'")
