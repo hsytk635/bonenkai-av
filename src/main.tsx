@@ -115,6 +115,38 @@ function Preview({media,url,close}:{media:Media;url:string;close:()=>void}) {
     {error && <p role="alert">{error}</p>}<button onClick={close}>閉じる</button>
   </dialog>
 }
+
+function PlaybackTimeline({label,position,duration,seek}:{label:string;position:number;duration:number;seek:(seconds:number)=>void}) {
+  const [draft,setDraft]=useState<number|null>(null)
+  const isDragging=useRef(false)
+  const draftValue=useRef(position)
+  const end=Number.isFinite(duration)?duration:0
+  const value=Math.max(0,Math.min(draft ?? (Number.isFinite(position)?position:0),end))
+  return <label className="playback-timeline">
+    <span className="timeline-label">{label}</span>
+    <span className="timeline-track">
+      <span aria-hidden="true">{time(value)}</span>
+      <input type="range" aria-label={label} aria-valuetext={time(value)+' / '+time(duration)} min={0} max={end}
+        step={0.1} value={value} disabled={!end}
+        onPointerDown={e=>{e.currentTarget.setPointerCapture(e.pointerId);isDragging.current=true;draftValue.current=value;setDraft(value)}}
+        onChange={e=>{
+          const next=e.currentTarget.valueAsNumber
+          if(isDragging.current){draftValue.current=next;setDraft(next)}
+          else seek(next)
+        }}
+        onPointerUp={()=>{
+          if (!isDragging.current) return
+          isDragging.current=false
+          seek(draftValue.current)
+          setDraft(null)
+        }}
+        onPointerCancel={()=>{isDragging.current=false;setDraft(null)}}
+        onLostPointerCapture={()=>{isDragging.current=false;setDraft(null)}}
+        onBlur={()=>{isDragging.current=false;setDraft(null)}}/>
+      <span aria-hidden="true">{time(duration)}</span>
+    </span>
+  </label>
+}
 function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignOut?:()=>Promise<unknown>}) {
   const assets=useMemo(()=>new Assets(),[])
   const [library,setLibrary]=useState<Library>(()=>demo?{...empty,media:makeDemo(assets.local)}:empty)
@@ -225,6 +257,10 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
     {demo && <p className="demo">動作確認モード · 共有機能は Supabase 設定後に利用できます</p>}
     <div className="statusbar"><span className={audio?'ok':''}>● 音声 {audio?'有効':'未有効'}</span><span className={output?.connected?'ok':''}>● 映像 {signal}</span><span className={online?'ok':'warn'}>● {online?'オンライン':'オフライン'}</span><button onClick={()=>void run(activate)}>音声を有効化</button><button onClick={()=>void run(()=>getEngine().output.open())}>映像出力画面を開く</button></div>
     {(error || output?.error) && <div className="alert" role="alert">{error || output?.error}</div>}
+    {mixer?.current && <section className="panel now-playing" aria-label="BGMプレーヤー">
+      <strong>{mixer.current.title}</strong>
+      <PlaybackTimeline key={mixer.current.id} label="BGMの再生位置" position={mixer.position} duration={mixer.duration} seek={seconds=>{mixer.seekBgm(seconds);setClock(v=>v+1)}}/>
+    </section>}
     <div className="workspace">
       <section className="library panel">
         {reorder ? <Reorder media={shown.media} kind={tab} renderCue={renderCue} done={async()=>{await refresh();setReorder(false)}} cancel={()=>{setReorder(false);void refresh()}}/> : <>
@@ -247,7 +283,7 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
           <canvas ref={canvas} width="480" height="270" aria-label="現在の投影映像"/>
           <p>{output?.media?.title ?? '投影素材なし'}</p>
           <div className="row"><button disabled={!video} onClick={()=>void output?.transport('toggle')}>{video?.paused?'再開':'一時停止'}</button><button disabled={!video} onClick={()=>void output?.transport('restart')}>頭出し</button></div>
-          {video && <label>再生位置 {time(video.currentTime)} / {time(duration)}<input type="range" min={0} max={Number.isFinite(duration)?duration:0} step={0.1} value={video.currentTime} onChange={e=>output?.seek(+e.target.value)}/></label>}
+          {video && <PlaybackTimeline key={output?.media?.id} label="動画の再生位置" position={video.currentTime} duration={duration} seek={seconds=>{output?.seek(seconds);setClock(v=>v+1)}}/>}
           <div className="row"><button disabled={!output?.connected} onClick={()=>void run(()=>output?.showStandby())}>待機画面</button><button disabled={!output?.connected} onClick={()=>output?.clear(false)}>黒画面</button></div>
         </section>
         <section className="panel prep"><div className="sectionHead"><h2>本番準備</h2><span className={frozen?'ok':'muted'}>{frozen?'本番モード':'準備モード'}</span></div>
@@ -259,7 +295,7 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
         </section>
       </aside>
     </div>
-    <footer className="mixer panel"><div className="mixerHead"><div><h2>オーディオミキサー</h2><p>{mixer?.current?mixer.current.title+' · '+time(mixer.position):'BGM 停止中'}</p></div>
+    <footer className="mixer panel"><div className="mixerHead"><div><h2>オーディオミキサー</h2>{!mixer?.current && <p>BGM 停止中</p>}</div>
       <div className="row"><button disabled={!mixer?.current} onClick={()=>mixer?.toggleBgm()}>{mixer?.isPaused?'BGM再開':'BGM一時停止'}</button><button onClick={()=>setDuck(!(duck??shown.settings.duck))}>ダッキング {(duck??shown.settings.duck)?'ON':'OFF'}</button></div></div>
       <div className="levels">{(Object.keys(levels) as (keyof typeof levels)[]).map(k=><label key={k}><span>{levelLabels[k]} <b>{levels[k]}%</b></span><input type="range" min={0} max={100} value={levels[k]} onChange={e=>setLevels({...levels,[k]:+e.target.value})}/></label>)}</div>
       <div className="row stops"><button onClick={()=>{mixer?.stop();output?.mute(output.media?.fade_out_ms ?? 500)}}>フェードアウト</button><button className="danger" onClick={()=>{mixer?.stop(0);output?.mute()}}>全音声停止</button><button className="danger" onClick={()=>output?.clear(false)}>映像停止</button><button className="danger solid" onClick={()=>{mixer?.stop(0);output?.clear(false)}}>全停止</button></div>
