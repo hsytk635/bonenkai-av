@@ -81,3 +81,13 @@ label.inline{display:flex;align-items:center;gap:.5rem}
   .stops button{flex:1 1 130px}
   .tabs{gap:.35rem}
 }
+
+.reorder p{margin:.65rem 0}
+.reorder ol{list-style:none;padding:0;margin:0;display:grid;gap:.45rem}
+.reorder li{display:flex;gap:.55rem;align-items:center;border:1px solid var(--border);border-radius:8px;padding:.5rem;background:#fcfdff}
+.order-index{min-width:1.7rem;text-align:center;font-variant-numeric:tabular-nums;color:var(--secondary)}
+.order-name{min-width:0;flex:1;overflow-wrap:anywhere}
+.order-name small,.order-name strong{display:block}
+.order-name small{color:var(--secondary)}
+.reorder li .row{flex-wrap:nowrap}
+.reorder li button{min-height:44px;padding-inline:.55rem}
