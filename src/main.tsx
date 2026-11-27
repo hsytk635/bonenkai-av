@@ -43,6 +43,8 @@ function Gate() {
   const [loading,setLoading]=useState(!!db)
   const [error,setError]=useState('')
   const [setup,setSetup]=useState(inviteSetup)
+  const [link,setLink]=useState(()=>new URLSearchParams(location.hash.slice(1)).get('av'))
+  const [linkStatus,setLinkStatus]=useState('')
   useEffect(()=>{
     if (!db) return
     const {data}=db.auth.onAuthStateChange((event,s)=>{
@@ -51,6 +53,22 @@ function Gate() {
     })
     return ()=>data.subscription.unsubscribe()
   },[])
+  useEffect(()=>{
+    if (!db || !link || loading) return
+    let cancelled=false
+    async function openSharedLink() {
+      const {data,error}=await db!.functions.invoke('open-shared-link',{body:{code:link}})
+      if (error || !data?.token_hash) throw new Error('共有リンクが無効か、期限が切れています。')
+      const result=await db!.auth.verifyOtp({type:'magiclink',token_hash:data.token_hash})
+      if (result.error) throw new Error('共有リンクに接続できません。時間をおいて開き直してください。')
+      if (!cancelled) {
+        history.replaceState(null,'',location.pathname+location.search)
+        setLink(null)
+      }
+    }
+    void openSharedLink().catch(e=>{if(!cancelled)setLinkStatus(message(e))})
+    return ()=>{cancelled=true}
+  },[link,loading])
   const userId=session?.user.id
   useEffect(()=>{
     if (!userId) {setMember(null);return}
@@ -60,6 +78,7 @@ function Gate() {
   },[userId])
   if (!db) return <Board actor={demoUser} demo/>
   if (loading) return <p className="loading">認証を確認しています…</p>
+  if (link) return <main className="login"><div className="panel login-card"><h1>忘年会 AVコントローラー</h1><p role={linkStatus?'alert':'status'}>{linkStatus || '共有ライブラリに接続しています…'}</p></div></main>
   if (!session || setup) return <SignIn session={session} passwordSetup={setup && !!session} onDone={()=>setSetup(false)}/>
   if (!member || member.user_id!==userId) return <main className="login"><div className="panel login-card"><p>{error || 'メンバー権限を確認しています…'}</p><button onClick={()=>void db!.auth.signOut()}>ログアウト</button></div></main>
   return <Board key={member.user_id} actor={member} onSignOut={()=>db!.auth.signOut()}/>
