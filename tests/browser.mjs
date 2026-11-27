@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import {writeFile} from 'node:fs/promises'
 import { createServer } from 'vite'
 import { chromium } from '../node_modules/.qa/node_modules/playwright-core/index.mjs'
 
 const executablePath = process.argv[2] ?? 'C:/Program Files/Google/Chrome/Application/chrome.exe'
-const vite = await createServer({server:{host:'127.0.0.1',port:4173,strictPort:true},optimizeDeps:{include:['react/jsx-dev-runtime']}})
+const testPort = Number(process.env.AV_TEST_PORT ?? 4173)
+const vite = await createServer({server:{host:'127.0.0.1',port:testPort,strictPort:true},optimizeDeps:{include:['react/jsx-dev-runtime']}})
 await vite.listen()
 let browser
 try {
@@ -12,7 +14,7 @@ try {
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', error=>errors.push(error))
-  await page.goto('http://127.0.0.1:4173/')
+  await page.goto('http://127.0.0.1:'+testPort+'/')
   await page.getByRole('heading',{name:'忘年会 AVコントローラー'}).waitFor()
   await page.getByRole('button',{name:'音声を有効化',exact:true}).click()
   await page.getByText('● 音声 有効',{exact:true}).waitFor()
@@ -99,6 +101,28 @@ try {
     tone.start()
     const animation=setInterval(()=>{draw.fillStyle=Math.random()>0.5?'#36bea5':'#b4466d';draw.fillRect(0,0,160,90)},40)
     const stream=new MediaStream([...canvas.captureStream(25).getVideoTracks(),...source.stream.getAudioTracks()])
+    let m4aBytes
+    if (MediaRecorder.isTypeSupported('audio/mp4;codecs=mp4a.40.2')) {
+      const chunks=[]
+      const recorder=new MediaRecorder(source.stream,{mimeType:'audio/mp4;codecs=mp4a.40.2'})
+      recorder.ondataavailable=e=>chunks.push(e.data)
+      const stopped=new Promise(resolve=>recorder.onstop=resolve)
+      recorder.start()
+      await delay(850)
+      recorder.stop()
+      await stopped
+      const file=new File(chunks,'test.m4a',{type:'audio/mp4'})
+      const {mime,ext}=await inspect(file,'effect')
+      require(mime==='audio/mp4' && ext==='m4a','M4A validation')
+      const u=URL.createObjectURL(file)
+      const meta=await probe(u,'effect')
+      const buffer=await mixer.preload({...effect,storage_path:'test-m4a'},u)
+      require(meta.duration>0 && buffer.duration>0,'M4A metadata and decode')
+      await mixer.play({...effect,storage_path:'test-m4a'},async()=>u)
+      require(Array.from(mixer.voices).some(v=>v.media.storage_path==='test-m4a'),'M4A playback')
+      URL.revokeObjectURL(u)
+      m4aBytes=Array.from(new Uint8Array(await file.arrayBuffer()))
+    }
     const formats = []
     try {
       for(const mimeType of ['video/webm','video/mp4']) {
@@ -154,9 +178,11 @@ try {
         formats.push(mimeType)
       }
     } finally {clearInterval(animation);tone.stop();await mixer.ctx.close()}
-    return formats
+    return {formats,m4aBytes}
   })
-  assert.ok(result.includes('video/webm'))
+  assert.ok(result.formats.includes('video/webm'))
+  assert.ok(result.m4aBytes?.length,'AAC M4A recording and playback')
+  if(process.env.AV_TEST_M4A_FILE) await writeFile(process.env.AV_TEST_M4A_FILE,Buffer.from(result.m4aBytes))
   assert.deepEqual(errors,[])
-  console.log(browser.version(), 'passed: UI, fullscreen, offline, popup reopen, simultaneous effects, ducking, PNG/JPEG/WebP, '+result.join(', '))
+  console.log(browser.version(), 'passed: UI, fullscreen, offline, popup reopen, simultaneous effects, ducking, PNG/JPEG/WebP, '+result.formats.join(', ')+', AAC M4A')
 } finally {await browser?.close();await vite.close()}
