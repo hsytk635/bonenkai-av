@@ -7,7 +7,7 @@ const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const db = url && key ? createClient(url,key) : null
 export const bucket = 'av-media'
 export const maxSize = 50_000_000
-const formats: Record<string,string> = {mp3:'audio/mpeg',wav:'audio/wav',mp4:'video/mp4',webm:'video/webm',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp'}
+const formats: Record<string,string> = {mp3:'audio/mpeg',wav:'audio/wav',m4a:'audio/mp4',mp4:'video/mp4',webm:'video/webm',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp'}
 export async function loadLibrary() {
   const connection = db!
   const [media,categories,settings] = await Promise.all([
@@ -37,7 +37,7 @@ export async function inspect(file:File, kind:Media['media_type']) {
   const ascii = (a:number,b:number) => String.fromCharCode(...bytes.slice(a,b))
   const valid = {
     mp3: ascii(0,3)==='ID3' || (bytes[0]===255 && (bytes[1]&224)===224),
-    wav: ascii(0,4)==='RIFF' && ascii(8,12)==='WAVE', mp4:ascii(4,8)==='ftyp',
+    wav: ascii(0,4)==='RIFF' && ascii(8,12)==='WAVE', mp4:ascii(4,8)==='ftyp', m4a:ascii(4,8)==='ftyp',
     webm:bytes[0]===26 && bytes[1]===69 && bytes[2]===223 && bytes[3]===163,
     png:bytes[0]===137 && ascii(1,4)==='PNG', jpg:bytes[0]===255 && bytes[1]===216, jpeg:bytes[0]===255 && bytes[1]===216,
     webp:ascii(0,4)==='RIFF' && ascii(8,12)==='WEBP'
