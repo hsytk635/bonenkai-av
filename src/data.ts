@@ -6,17 +6,80 @@ const url = import.meta.env.VITE_SUPABASE_URL
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const db = url && key ? createClient(url,key) : null
 export const bucket = 'av-media'
+
+const accessStorageKey = 'bonenkai-av-share'
+export function sharedLinkCode() {
+  const code = new URLSearchParams(location.hash.slice(1)).get('av')
+  if (code) return code
+  try { return sessionStorage.getItem(accessStorageKey) } catch { return null }
+}
+let opening: Promise<void> | null = null
+export function openSharedSession(code: string) {
+  if (opening) return opening
+  opening = (async () => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const {data,error} = await db!.functions.invoke('open-shared-link',{body:{code}})
+      if (error || !data?.token_hash) throw new Error('共有リンクを確認できません。担当者専用リンクを開き直してください。')
+      const result = await db!.auth.verifyOtp({type:'magiclink',token_hash:data.token_hash})
+      if (result.data.session && !result.error) {
+        try { sessionStorage.setItem(accessStorageKey,code) } catch { /* The link in the address is still available. */ }
+        return
+      }
+    }
+    throw new Error('共有ライブラリに接続できません。少し待ってから再読み込みしてください。')
+  })().finally(()=>{ opening = null })
+  return opening
+}
+export function forgetSharedLink() {
+  try { sessionStorage.removeItem(accessStorageKey) } catch { /* Storage may be unavailable. */ }
+  history.replaceState(null,'',location.pathname+location.search)
+}
+
+type ReadError = {code?:string; status?:number | string; statusCode?:number | string; message:string}
+const accessFailure = (e:ReadError) =>
+  /^(401|403)$/.test(String(e.status ?? e.statusCode)) ||
+  ['42501','PGRST301','PGRST303'].includes(e.code ?? '') ||
+  /permission denied|jwt expired|invalid jwt/i.test(e.message)
+const missingObject = (e:ReadError) =>
+  Number(e.status ?? e.statusCode)===404 || /object\s*not\s*found/i.test(e.message)
+let recovering: Promise<void> | null = null
+function recoverSession() {
+  if (recovering) return recovering
+  recovering = (async () => {
+    const refreshed = await db!.auth.refreshSession()
+    if (refreshed.data.session && !refreshed.error) {
+      const {data:role,error} = await db!.rpc('av_role')
+      if (role && !error) return
+    }
+    const code = sharedLinkCode()
+    if (code) await openSharedSession(code)
+  })().finally(()=>{ recovering = null })
+  return recovering
+}
+async function readWithAccess<T>(read:()=>PromiseLike<{data:T;error:ReadError|null}>, storage=false) {
+  let result = await read()
+  if (result.error && (accessFailure(result.error) || (storage && missingObject(result.error)))) {
+    await recoverSession()
+    result = await read()
+  }
+  if (result.error) {
+    if (accessFailure(result.error)) throw new Error('共有ライブラリへのアクセスを確認できません。担当者専用リンクを開き直してください。')
+    if (storage && missingObject(result.error)) throw new Error('共有ファイルが見つからないか、取得できません。ライブラリを再読み込みしてください。')
+    throw result.error
+  }
+  return result.data
+}
+
 export const maxSize = 50_000_000
 const formats: Record<string,string> = {mp3:'audio/mpeg',wav:'audio/wav',m4a:'audio/mp4',mp4:'video/mp4',webm:'video/webm',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp'}
 export async function loadLibrary() {
   const connection = db!
   const [media,categories,settings] = await Promise.all([
-    connection.from('media').select('*').order('sort_order').order('title'),
-    connection.from('categories').select('*').order('sort_order'),
-    connection.from('settings').select('setting_value').eq('setting_key','show').maybeSingle()
+    readWithAccess(()=>connection.from('media').select('*').order('sort_order').order('title')),
+    readWithAccess(()=>connection.from('categories').select('*').order('sort_order')),
+    readWithAccess(()=>connection.from('settings').select('setting_value').eq('setting_key','show').maybeSingle())
   ])
-  for (const res of [media,categories,settings]) if (res.error) throw res.error
-  return {media:media.data as Media[],categories:categories.data as Category[],settings:{...defaults,...settings.data?.setting_value} as Settings}
+  return {media:media as Media[],categories:categories as Category[],settings:{...defaults,...settings?.setting_value} as Settings}
 }
 export async function profile(id:string) {
   const {data,error} = await db!.from('profiles').select('*').eq('user_id',id).maybeSingle()
@@ -24,8 +87,8 @@ export async function profile(id:string) {
   return data as Profile | null
 }
 export async function signed(path:string) {
-  const {data,error} = await db!.storage.from(bucket).createSignedUrl(path,900)
-  if (error) throw error
+  const data = await readWithAccess(()=>db!.storage.from(bucket).createSignedUrl(path,900),true)
+  if (!data) throw new Error('共有ファイルの再生URLを取得できません。')
   return data.signedUrl
 }
 export async function inspect(file:File, kind:Media['media_type']) {
