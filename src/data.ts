@@ -75,7 +75,7 @@ const formats: Record<string,string> = {mp3:'audio/mpeg',wav:'audio/wav',m4a:'au
 export async function loadLibrary() {
   const connection = db!
   const [media,categories,settings] = await Promise.all([
-    readWithAccess(()=>connection.from('media').select('*').order('sort_order').order('title')),
+    readWithAccess(()=>connection.from('media').select('*').order('sort_order').order('title').order('id')),
     readWithAccess(()=>connection.from('categories').select('*').order('sort_order')),
     readWithAccess(()=>connection.from('settings').select('setting_value').eq('setting_key','show').maybeSingle())
   ])
@@ -91,21 +91,40 @@ export async function signed(path:string) {
   if (!data) throw new Error('共有ファイルの再生URLを取得できません。')
   return data.signedUrl
 }
+const extension = (name:string) => name.split('.').pop()?.toLowerCase() ?? ''
+export function fileFamily(name:string) {
+  return formats[extension(name)]?.split('/')[0]
+}
+async function hasMp4Header(file:File) {
+  let offset=0
+  while (offset+8<=file.size && offset<1048576) {
+    const header=new DataView(await file.slice(offset,offset+16).arrayBuffer())
+    const size=header.getUint32(0)
+    const tag=String.fromCharCode(...new Uint8Array(header.buffer,4,4))
+    if(tag==='ftyp')return size>=16 && offset+size<=file.size
+    if(!['free','skip','wide'].includes(tag) || size<8)break
+    offset+=size
+  }
+  return false
+}
 export async function inspect(file:File, kind:Media['media_type']) {
-  const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+  const ext = extension(file.name)
   const mime = formats[ext]
   const prefix = kind === 'image' || kind === 'video' ? kind : 'audio'
-  if (!mime?.startsWith(prefix+'/') || !file.size || file.size > maxSize) throw new Error('指定種別の対応形式と50 MB以内のサイズを確認してください')
+  if (!file.size) throw new Error('ファイルが空です。元のファイルを選んでください。')
+  if (file.size > maxSize) throw new Error('このファイルは '+(file.size/1e6).toFixed(1)+' MB です。共有に登録できるサイズは50 MBまでです。動画は書き出し時に画質やビットレートを下げてください。')
+  if (!mime) throw new Error('この拡張子は登録できません。動画はMP4またはWebMを選んでください。')
+  if (!mime.startsWith(prefix+'/')) throw new Error('ファイルに合わせて種別を選んでください。MP4とWebMは「動画」です。')
   const bytes = new Uint8Array(await file.slice(0,16).arrayBuffer())
   const ascii = (a:number,b:number) => String.fromCharCode(...bytes.slice(a,b))
   const valid = {
     mp3: ascii(0,3)==='ID3' || (bytes[0]===255 && (bytes[1]&224)===224),
-    wav: ascii(0,4)==='RIFF' && ascii(8,12)==='WAVE', mp4:ascii(4,8)==='ftyp', m4a:ascii(4,8)==='ftyp',
+    wav: ascii(0,4)==='RIFF' && ascii(8,12)==='WAVE', mp4:true, m4a:true,
     webm:bytes[0]===26 && bytes[1]===69 && bytes[2]===223 && bytes[3]===163,
     png:bytes[0]===137 && ascii(1,4)==='PNG', jpg:bytes[0]===255 && bytes[1]===216, jpeg:bytes[0]===255 && bytes[1]===216,
     webp:ascii(0,4)==='RIFF' && ascii(8,12)==='WEBP'
   }[ext]
-  if (!valid) throw new Error('ファイルの内容と拡張子が一致しません')
+  if (!valid || ((ext==='mp4' || ext==='m4a') && !await hasMp4Header(file))) throw new Error('ファイルの内容と拡張子が一致しません。動画はMP4 (H.264 / AAC) で書き出してください。')
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-256',await file.arrayBuffer()))
   return {ext,mime,checksum:Array.from(hash,n=>n.toString(16).padStart(2,'0')).join('')}
 }
@@ -116,8 +135,8 @@ export async function probe(objectUrl:string, kind:Media['media_type'], thumbnai
     const element = image ?? player!
     const loaded = new Promise<void>((resolve,reject) => {
       const timer = window.setTimeout(()=>reject(new Error('メディアの読み込みがタイムアウトしました')),15000)
-      element.addEventListener('error',()=>{clearTimeout(timer);reject(new Error('このブラウザで開けないメディアです'))},{once:true})
-      element.addEventListener(image ? 'load' : 'loadeddata',()=>{clearTimeout(timer);resolve()},{once:true})
+      element.addEventListener('error',()=>{clearTimeout(timer);reject(new Error(kind==='video'?'動画を読み込めません。MP4の場合は映像H.264・音声AACで書き出し、もう一度選んでください。':'このブラウザで開けないメディアです'))},{once:true})
+      element.addEventListener(image ? 'load' : kind==='video' && thumbnail ? 'loadedmetadata' : 'loadeddata',()=>{clearTimeout(timer);resolve()},{once:true})
     })
     if (player) { player.muted = true; player.preload='auto' }
     element.src = objectUrl
@@ -127,7 +146,24 @@ export async function probe(objectUrl:string, kind:Media['media_type'], thumbnai
     const h = image?.naturalHeight ?? video?.videoHeight ?? 0
     if ((image || video) && !(w && h)) throw new Error('有効な映像トラックがありません')
     let blob:Blob | null = null
-    if (thumbnail && w && h) {
+    // Some mobile browsers load video metadata on selection but defer decoding the first frame.
+    if (thumbnail && video && video.readyState < 2) {
+      await new Promise<void>((resolve,reject)=>{
+        const finish=(error?:Error)=>{
+          window.clearTimeout(timer)
+          video.removeEventListener('loadeddata',ready)
+          video.removeEventListener('error',failed)
+          if(error)reject(error)
+          else resolve()
+        }
+        const ready=()=>finish()
+        const failed=()=>finish(new Error('動画を読み込めません。MP4の場合は映像H.264・音声AACで書き出してください。'))
+        const timer=window.setTimeout(ready,2300)
+        video.addEventListener('loadeddata',ready,{once:true})
+        video.addEventListener('error',failed,{once:true})
+      })
+    }
+    if (thumbnail && w && h && (!video || video.readyState >= 2)) {
       const canvas = document.createElement('canvas')
       const scale = Math.min(320/w,180/h,1)
       canvas.width = Math.max(1,Math.round(w*scale)); canvas.height = Math.max(1,Math.round(h*scale))
