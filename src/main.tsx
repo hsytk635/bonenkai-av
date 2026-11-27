@@ -116,13 +116,16 @@ function Preview({media,url,close}:{media:Media;url:string;close:()=>void}) {
   </dialog>
 }
 
-function PlaybackTimeline({label,position,duration,seek}:{label:string;position:number;duration:number;seek:(seconds:number)=>void}) {
+function PlaybackTimeline({label,kind,position,duration,paused,seek,toggle}:{
+  label:string;kind:string;position:number;duration:number;paused:boolean;seek:(seconds:number)=>void;toggle:()=>void
+}) {
   const [draft,setDraft]=useState<number|null>(null)
   const isDragging=useRef(false)
   const draftValue=useRef(position)
   const end=Number.isFinite(duration)?duration:0
   const value=Math.max(0,Math.min(draft ?? (Number.isFinite(position)?position:0),end))
-  return <label className="playback-timeline">
+  const action=paused ? '再生' : '一時停止'
+  return <div className="playback-timeline">
     <span className="timeline-label">{label}</span>
     <span className="timeline-track">
       <span aria-hidden="true">{time(value)}</span>
@@ -144,8 +147,9 @@ function PlaybackTimeline({label,position,duration,seek}:{label:string;position:
         onLostPointerCapture={()=>{isDragging.current=false;setDraft(null)}}
         onBlur={()=>{isDragging.current=false;setDraft(null)}}/>
       <span aria-hidden="true">{time(duration)}</span>
+      <button type="button" className="transport-toggle" aria-label={kind+action} disabled={!end} onClick={toggle}>{action}</button>
     </span>
-  </label>
+  </div>
 }
 function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignOut?:()=>Promise<unknown>}) {
   const assets=useMemo(()=>new Assets(),[])
@@ -259,7 +263,7 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
     {(error || output?.error) && <div className="alert" role="alert">{error || output?.error}</div>}
     {mixer?.current && <section className="panel now-playing" aria-label="BGMプレーヤー">
       <strong>{mixer.current.title}</strong>
-      <PlaybackTimeline key={mixer.current.id} label="BGMの再生位置" position={mixer.position} duration={mixer.duration} seek={seconds=>{mixer.seekBgm(seconds);setClock(v=>v+1)}}/>
+      <PlaybackTimeline key={mixer.current.id} label="BGMの再生位置" kind="BGM" paused={mixer.isPaused} toggle={()=>{mixer.toggleBgm();setClock(v=>v+1)}} position={mixer.position} duration={mixer.duration} seek={seconds=>{mixer.seekBgm(seconds);setClock(v=>v+1)}}/>
     </section>}
     <div className="workspace">
       <section className="library panel">
@@ -282,8 +286,8 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
         <section className="panel monitor"><div className="sectionHead"><h2>映像出力</h2><span className={output?.connected?'ok':'muted'}>{signal}</span></div>
           <canvas ref={canvas} width="480" height="270" aria-label="現在の投影映像"/>
           <p>{output?.media?.title ?? '投影素材なし'}</p>
-          <div className="row"><button disabled={!video} onClick={()=>void output?.transport('toggle')}>{video?.paused?'再開':'一時停止'}</button><button disabled={!video} onClick={()=>void output?.transport('restart')}>頭出し</button></div>
-          {video && <PlaybackTimeline key={output?.media?.id} label="動画の再生位置" position={video.currentTime} duration={duration} seek={seconds=>{output?.seek(seconds);setClock(v=>v+1)}}/>}
+          <div className="row"><button disabled={!video} onClick={()=>void output?.transport('restart')}>頭出し</button></div>
+          {video && <PlaybackTimeline key={output?.media?.id} label="動画の再生位置" kind="動画" paused={video.paused} toggle={()=>void output?.transport('toggle')} position={video.currentTime} duration={duration} seek={seconds=>{output?.seek(seconds);setClock(v=>v+1)}}/>}
           <div className="row"><button disabled={!output?.connected} onClick={()=>void run(()=>output?.showStandby())}>待機画面</button><button disabled={!output?.connected} onClick={()=>output?.clear(false)}>黒画面</button></div>
         </section>
         <section className="panel prep"><div className="sectionHead"><h2>本番準備</h2><span className={frozen?'ok':'muted'}>{frozen?'本番モード':'準備モード'}</span></div>
@@ -296,7 +300,7 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
       </aside>
     </div>
     <footer className="mixer panel"><div className="mixerHead"><div><h2>オーディオミキサー</h2>{!mixer?.current && <p>BGM 停止中</p>}</div>
-      <div className="row"><button disabled={!mixer?.current} onClick={()=>mixer?.toggleBgm()}>{mixer?.isPaused?'BGM再開':'BGM一時停止'}</button><button onClick={()=>setDuck(!(duck??shown.settings.duck))}>ダッキング {(duck??shown.settings.duck)?'ON':'OFF'}</button></div></div>
+      <div className="row"><button onClick={()=>setDuck(!(duck??shown.settings.duck))}>ダッキング {(duck??shown.settings.duck)?'ON':'OFF'}</button></div></div>
       <div className="levels">{(Object.keys(levels) as (keyof typeof levels)[]).map(k=><label key={k}><span>{levelLabels[k]} <b>{levels[k]}%</b></span><input type="range" min={0} max={100} value={levels[k]} onChange={e=>setLevels({...levels,[k]:+e.target.value})}/></label>)}</div>
       <div className="row stops"><button onClick={()=>{mixer?.stop();output?.mute(output.media?.fade_out_ms ?? 500)}}>フェードアウト</button><button className="danger" onClick={()=>{mixer?.stop(0);output?.mute()}}>全音声停止</button><button className="danger" onClick={()=>output?.clear(false)}>映像停止</button><button className="danger solid" onClick={()=>{mixer?.stop(0);output?.clear(false)}}>全停止</button></div>
     </footer>
