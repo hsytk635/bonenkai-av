@@ -1,7 +1,7 @@
 import { createRoot } from 'react-dom/client'
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type CSSProperties } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { Administration, Editor, removeMedia, roles } from './admin'
+import { Administration, Editor, Reorder, removeMedia, roles } from './admin'
 import { Assets, db, inviteSetup, loadLibrary, probe, profile, signed, sharedLinkCode, openSharedSession, forgetSharedLink } from './data'
 import { makeDemo } from './demo'
 import { Mixer } from './mixer'
@@ -130,6 +130,7 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
   const [tab,setTab]=useState<Kind|'all'>('all')
   const [query,setQuery]=useState('')
   const [sort,setSort]=useState('manual')
+  const [reorder,setReorder]=useState(false)
   const [edit,setEdit]=useState<Media|null|undefined>(undefined)
   const [admin,setAdmin]=useState(false)
   const [preview,setPreview]=useState<{media:Media;url:string}|null>(null)
@@ -196,7 +197,7 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
   }
   async function stage() {
     const {mixer}=getEngine()
-    if(edit!==undefined || admin || preview)throw new Error('編集やプレビューを閉じてから準備してください')
+    if(edit!==undefined || admin || preview || reorder)throw new Error('編集やプレビューを閉じてから準備してください')
     if(!shown.media.length)throw new Error('ライブラリに素材を登録してください')
     setPrepare(true);setReady(false);setStatus('事前読み込みを開始…')
     try {
@@ -225,7 +226,8 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
     {(error || output?.error) && <div className="alert" role="alert">{error || output?.error}</div>}
     <div className="workspace">
       <section className="library panel">
-        <div className="sectionHead"><h2>メディアライブラリ</h2>{canEdit && <button className="primary" onClick={()=>setEdit(null)}>＋ メディア登録</button>}</div>
+        {reorder ? <Reorder media={shown.media} done={async()=>{await refresh();setSort('manual');setReorder(false)}} cancel={()=>{setReorder(false);void refresh()}}/> : <>
+        <div className="sectionHead"><h2>メディアライブラリ</h2>{canEdit && <div className="row">{shown.media.length>1 && <button onClick={()=>setReorder(true)}>並べ替え</button>}<button className="primary" onClick={()=>setEdit(null)}>＋ メディア登録</button></div>}</div>
         <nav className="tabs" aria-label="メディア種別">{(['all',...kinds] as const).map(k=><button key={k} aria-pressed={tab===k} onClick={()=>setTab(k)}>{k==='all'?'すべて':labels[k]}</button>)}</nav>
         <div className="filters"><input type="search" aria-label="メディア検索" placeholder="名前・カテゴリで検索" value={query} onChange={e=>setQuery(e.target.value)}/><select aria-label="並び順" value={sort} onChange={e=>setSort(e.target.value)}><option value="manual">登録の並び順</option><option value="name">名前順</option><option value="new">新着順</option></select></div>
         <div className="cards">{rows.map(m=>{
@@ -239,6 +241,7 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
             </div></article>
         })}</div>
         {!rows.length && <p className="empty">表示できるメディアがありません。</p>}
+        </>}
       </section>
       <aside className="side">
         <section className="panel monitor"><div className="sectionHead"><h2>映像出力</h2><span className={output?.connected?'ok':'muted'}>{signal}</span></div>
@@ -262,7 +265,7 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
       <div className="levels">{(Object.keys(levels) as (keyof typeof levels)[]).map(k=><label key={k}><span>{levelLabels[k]} <b>{levels[k]}%</b></span><input type="range" min={0} max={100} value={levels[k]} onChange={e=>setLevels({...levels,[k]:+e.target.value})}/></label>)}</div>
       <div className="row stops"><button onClick={()=>{mixer?.stop();output?.mute(output.media?.fade_out_ms ?? 500)}}>フェードアウト</button><button className="danger" onClick={()=>{mixer?.stop(0);output?.mute()}}>全音声停止</button><button className="danger" onClick={()=>output?.clear(false)}>映像停止</button><button className="danger solid" onClick={()=>{mixer?.stop(0);output?.clear(false)}}>全停止</button></div>
     </footer>
-    {canEdit && edit!==undefined && <Editor item={edit} actor={actor} categories={shown.categories} done={()=>{setEdit(undefined);void refresh()}} cancel={()=>setEdit(undefined)}/>}
+    {canEdit && edit!==undefined && <Editor item={edit} actor={actor} categories={shown.categories} nextOrder={shown.media.reduce((top,m)=>Math.max(top,m.sort_order),0)+1} done={()=>{setEdit(undefined);void refresh()}} cancel={()=>setEdit(undefined)}/>}
     {canEdit && admin && <Administration actor={actor} settings={shown.settings} categories={shown.categories} media={shown.media} refresh={()=>void refresh()} close={()=>setAdmin(false)}/>}
     {preview && <Preview {...preview} close={()=>setPreview(null)}/>}
   </main>
