@@ -128,8 +128,6 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
   const [ready,setReady]=useState(false)
   const [prepare,setPrepare]=useState(false)
   const [tab,setTab]=useState<Kind|'all'>('all')
-  const [query,setQuery]=useState('')
-  const [sort,setSort]=useState('manual')
   const [reorder,setReorder]=useState(false)
   const [edit,setEdit]=useState<Media|null|undefined>(undefined)
   const [admin,setAdmin]=useState(false)
@@ -212,8 +210,11 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
     await assets.clear();setReady(false);setFrozen(null);setStatus('')
     void refresh()
   }
-  const rows=shown.media.filter(m=>(tab==='all'||m.media_type===tab) && (m.title+' '+(shown.categories.find(c=>c.id===m.category_id)?.name ?? '')).toLowerCase().includes(query.toLowerCase()))
-  rows.sort(sort==='name'?(a,b)=>a.title.localeCompare(b.title,'ja'):sort==='new'?(a,b)=>b.created_at.localeCompare(a.created_at):(a,b)=>a.sort_order-b.sort_order || a.title.localeCompare(b.title,'ja'))
+  const rows=shown.media.filter(m=>tab==='all' || m.media_type===tab)
+  const renderCue=(m:Media)=>{
+    const cat=shown.categories.find(c=>c.id===m.category_id)
+    return <><Thumbnail media={m} local={assets.local}/><span className="cueText"><small>{labels[m.media_type]}{cat?' / '+cat.name:''}</small><strong>{m.title}</strong></span></>
+  }
   const video=output?.connected && output.media?.media_type==='video'?output.video:null
   const duration=video?.duration ?? NaN
   const signal=output?.connected ? output.status : '未接続'
@@ -226,15 +227,13 @@ function Board({actor,demo=false,onSignOut}:{actor:Profile;demo?:boolean;onSignO
     {(error || output?.error) && <div className="alert" role="alert">{error || output?.error}</div>}
     <div className="workspace">
       <section className="library panel">
-        {reorder ? <Reorder media={shown.media} done={async()=>{await refresh();setSort('manual');setReorder(false)}} cancel={()=>{setReorder(false);void refresh()}}/> : <>
-        <div className="sectionHead"><h2>メディアライブラリ</h2>{canEdit && <div className="row">{shown.media.length>1 && <button onClick={()=>setReorder(true)}>並べ替え</button>}<button className="primary" onClick={()=>setEdit(null)}>＋ メディア登録</button></div>}</div>
+        {reorder ? <Reorder media={shown.media} kind={tab} renderCue={renderCue} done={async()=>{await refresh();setReorder(false)}} cancel={()=>{setReorder(false);void refresh()}}/> : <>
+        <div className="sectionHead"><h2>メディアライブラリ</h2>{canEdit && <div className="row">{rows.length>1 && <button onClick={()=>setReorder(true)}>並べ替えモード</button>}<button className="primary" onClick={()=>setEdit(null)}>＋ メディア登録</button></div>}</div>
         <nav className="tabs" aria-label="メディア種別">{(['all',...kinds] as const).map(k=><button key={k} aria-pressed={tab===k} onClick={()=>setTab(k)}>{k==='all'?'すべて':labels[k]}</button>)}</nav>
-        <div className="filters"><input type="search" aria-label="メディア検索" placeholder="名前・カテゴリで検索" value={query} onChange={e=>setQuery(e.target.value)}/><select aria-label="並び順" value={sort} onChange={e=>setSort(e.target.value)}><option value="manual">登録の並び順</option><option value="name">名前順</option><option value="new">新着順</option></select></div>
         <div className="cards">{rows.map(m=>{
-          const cat=shown.categories.find(c=>c.id===m.category_id)
           const active=output?.media?.id===m.id || mixer?.current?.id===m.id || Array.from(mixer?.voices ?? []).some(v=>v.media.id===m.id)
-          return <article className={'cue'+(active?' active':'')} key={m.id} style={{'--cue':m.color || cat?.color} as CSSProperties}>
-            <button className="cuePlay" aria-label={m.title+'を本番出力'} onClick={()=>play(m)}><Thumbnail media={m} local={assets.local}/><span className="cueText"><small>{labels[m.media_type]}{cat?' / '+cat.name:''}</small><strong>{m.title}</strong></span><span className="playIcon">{active?'●':'▶'}</span></button>
+          return <article className={'cue'+(active?' active':'')} key={m.id} style={{'--cue':m.color} as CSSProperties}>
+            <button className="cuePlay" aria-label={m.title+'を本番出力'} onClick={()=>play(m)}>{renderCue(m)}<span className="playIcon">{active?'●':'▶'}</span></button>
             <div className="cueActions">{active && <span className="ok">{m.media_type==='bgm' && mixer?.isPaused?'一時停止':isVisual(m)?signal:'再生中'}</span>}
               <button onClick={()=>void run(async()=>setPreview({media:m,url:await assets.resolve(m)}))}>確認</button>
               {canEdit && <><button onClick={()=>setEdit(m)}>編集</button><button onClick={()=>{if(confirm(m.title+' を共有ライブラリから削除しますか？'))void run(async()=>{try{await removeMedia(m)}finally{await refresh()}})}}>削除</button></>}
