@@ -102,7 +102,7 @@ export class Mixer {
     }
     this.start(media,buffer,0)
   }
-  private start(media:Media, buffer:AudioBuffer, offset:number) {
+  private start(media:Media, buffer:AudioBuffer, offset:number, fadeIn = media.fade_in_ms) {
     const source = this.ctx.createBufferSource()
     const gain = this.ctx.createGain()
     gain.gain.value = 0
@@ -120,7 +120,7 @@ export class Mixer {
       this.updateDuck()
     }
     this.updateDuck()
-    this.ramp(gain.gain,media.volume/100,media.fade_in_ms)
+    this.ramp(gain.gain,media.volume/100,fadeIn)
     source.start(0,offset)
   }
   private end(voice:Voice, ms:number) {
@@ -147,6 +147,18 @@ export class Mixer {
       this.start(media,buffer,offset)
     }
   }
+  seekBgm(seconds:number) {
+    if (!Number.isFinite(seconds)) return
+    const track = this.bgm ?? this.paused
+    if (!track || this.bgm?.stopping) return
+    const offset = Math.max(0, Math.min(seconds,track.buffer.duration - 1/track.buffer.sampleRate))
+    if (this.paused) { this.paused.offset = offset; return }
+    if (this.bgm) {
+      this.end(this.bgm,10)
+      this.start(track.media,track.buffer,offset,10)
+    }
+  }
+  get duration() { return (this.bgm ?? this.paused)?.buffer.duration ?? 0 }
   get position() {
     if (!this.bgm) return this.paused?.offset ?? 0
     const pos = this.ctx.currentTime - this.bgm.started + this.bgm.offset
