@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type PointerEvent, type ReactNode } from 'react'
 import { bucket, db, fileFamily, inspect, probe, upload } from './data'
 import { isVisual, kinds, labels, message, type Category, type Media, type Profile, type Settings } from './model'
 const roles = {admin:'管理者',editor:'編集者',viewer:'閲覧者'}
@@ -128,21 +128,59 @@ export function Administration({actor,settings,media,categories,refresh,close}:{
   </dialog>
 }
 
-export function Reorder({media,done,cancel}:{media:Media[];done:()=>Promise<void>;cancel:()=>void}) {
+export function Reorder({media,kind,renderCue,done,cancel}:{
+  media:Media[];kind:Media['media_type']|'all';renderCue:(item:Media)=>ReactNode;done:()=>Promise<void>;cancel:()=>void
+}) {
   const [original]=useState(()=>media.map(m=>m.id))
   const [items,setItems]=useState(()=>[...media])
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
-  function move(index:number,step:number) {
+  const [dragging,setDragging]=useState<string|null>(null)
+  const [target,setTarget]=useState<string|null>(null)
+  const drag=useRef<{id:string;pointer:number}|null>(null)
+  const eligible=(item:Media)=>kind==='all' || item.media_type===kind
+  const visible=items.filter(eligible)
+  function move(fromId:string,toId:string) {
+    if(fromId===toId)return
     setItems(current=>{
-      const next=[...current]
-      const target=index+step
-      if(target<0 || target>=next.length)return current
-      const item=next[index]
-      next[index]=next[target]
-      next[target]=item
-      return next
+      const subset=current.filter(eligible)
+      const from=subset.findIndex(m=>m.id===fromId)
+      const to=subset.findIndex(m=>m.id===toId)
+      if(from<0 || to<0)return current
+      const [item]=subset.splice(from,1)
+      subset.splice(to,0,item)
+      let index=0
+      return current.map(m=>eligible(m)?subset[index++]:m)
     })
+  }
+  function atPointer(e:PointerEvent) {
+    return document.elementFromPoint(e.clientX,e.clientY)?.closest<HTMLElement>('[data-reorder-id]')?.dataset.reorderId
+  }
+  function start(e:PointerEvent<HTMLDivElement>) {
+    if(busy || drag.current || e.button!==0 || !e.isPrimary || !(e.target instanceof Element))return
+    const card=e.target.closest<HTMLElement>('[data-reorder-id]')
+    const id=card?.dataset.reorderId
+    if(!id || (e.pointerType!=='mouse' && !e.target.closest('.drag-handle')))return
+    // On touch, leave the rest of the card available for scrolling the page.
+    e.currentTarget.setPointerCapture(e.pointerId)
+    drag.current={id,pointer:e.pointerId}
+    setDragging(id)
+    setTarget(id)
+  }
+  function hover(e:PointerEvent<HTMLDivElement>) {
+    if(drag.current?.pointer!==e.pointerId)return
+    if(e.clientY<48)window.scrollBy(0,-16)
+    else if(e.clientY>window.innerHeight-48)window.scrollBy(0,16)
+    setTarget(atPointer(e)??null)
+  }
+  function finish(e:PointerEvent<HTMLDivElement>,drop:boolean) {
+    const active=drag.current
+    if(!active || active.pointer!==e.pointerId)return
+    drag.current=null
+    setDragging(null)
+    setTarget(null)
+    const position=drop ? atPointer(e) : undefined
+    if(position)move(active.id,position)
   }
   async function save() {
     setBusy(true)
@@ -155,17 +193,28 @@ export function Reorder({media,done,cancel}:{media:Media[];done:()=>Promise<void
   }
   const changed=items.some((item,index)=>item.id!==original[index])
   return <section aria-label="並べ替え" className="reorder">
-    <div className="sectionHead"><h2>メディアの並べ替え</h2><div className="row">
+    <div className="sectionHead"><h2>並べ替えモード</h2><div className="row">
       <button disabled={busy} onClick={cancel}>キャンセル</button>
-      <button className="primary" disabled={!changed || busy} onClick={()=>void save()}>{busy?'保存中…':'順番を保存'}</button>
+      <button className="primary" disabled={!changed || busy || !!dragging} onClick={()=>void save()}>{busy?'保存中…':'順番を保存'}</button>
     </div></div>
-    <p>「上へ」「下へ」で順番を変えます。保存すると全員の一覧に反映されます。</p>
+    <p>カードをドラッグして順番を変えます。スマホでは右の持ち手を使います。</p>
     {error && <p role="alert" className="alert">{error}</p>}
-    <ol>{items.map((item,i)=><li key={item.id}>
-      <span className="order-index">{i+1}</span>
-      <span className="order-name"><small>{labels[item.media_type]}</small><strong>{item.title}</strong></span>
-      <div className="row"><button disabled={busy || i===0} aria-label={item.title+'を上へ'} onClick={()=>move(i,-1)}>上へ</button>
-        <button disabled={busy || i===items.length-1} aria-label={item.title+'を下へ'} onClick={()=>move(i,1)}>下へ</button></div>
-    </li>)}</ol>
+    <div className="cards" onDragStart={e=>e.preventDefault()} onPointerDown={start} onPointerMove={hover} onPointerUp={e=>finish(e,true)}
+      onPointerCancel={e=>finish(e,false)} onLostPointerCapture={e=>finish(e,false)}>
+      {visible.map((item,index)=><article key={item.id} data-reorder-id={item.id}
+        className={'cue drag-card'+(dragging===item.id?' dragging':'')+(target===item.id && dragging!==item.id?' drag-target':'')}
+        style={{borderLeftColor:item.color}}>
+        <div className="cuePlay">{renderCue(item)}
+          <button type="button" className="drag-handle" disabled={busy}
+            aria-label={item.title+'の位置を変更'} aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
+            onKeyDown={e=>{
+              const step=e.key==='ArrowUp' || e.key==='ArrowLeft' ? -1 : e.key==='ArrowDown' || e.key==='ArrowRight' ? 1 : 0
+              const neighbor=visible[index+step]
+              if(step && neighbor){e.preventDefault();move(item.id,neighbor.id)}
+            }}>⠿</button>
+        </div>
+        <div className="cueActions drag-position"><span>{index+1} 番</span></div>
+      </article>)}
+    </div>
   </section>
 }
