@@ -9,6 +9,8 @@ create table av_private.shared_access (
   user_id uuid unique references auth.users(id)
 );
 
+alter table av_private.shared_access enable row level security;
+
 create function public.av_link_allowed(code text) returns boolean
 language sql stable security definer set search_path='' as $$
   select exists (
