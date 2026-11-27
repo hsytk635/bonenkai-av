@@ -53,7 +53,7 @@ export function Editor({item,categories,actor,done,cancel}:{item:Media | null; c
     <fieldset disabled={busy} className="fields">
       <label>表示名<input name="title" required maxLength={120} defaultValue={item?.title}/></label>
       <label>種別<select value={kind} disabled={!!item} onChange={e=>setKind(e.target.value as Media['media_type'])}>{kinds.map(k=><option key={k} value={k}>{labels[k]}</option>)}</select></label>
-      {!item && <label className="wide">ファイル（50 MBまで）<input name="file" type="file" required accept=".mp3,.wav,.mp4,.webm,.png,.jpg,.jpeg,.webp"/></label>}
+      {!item && <label className="wide">ファイル（50 MBまで）<input name="file" type="file" required accept=".mp3,.wav,.m4a,.mp4,.webm,.png,.jpg,.jpeg,.webp"/></label>}
       <label>カテゴリ<select name="category" defaultValue={item?.category_id ?? ''}><option value="">未分類</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
       <label>表示色<input name="color" type="color" defaultValue={item?.color ?? '#65c5b1'}/></label>
       <label>音量（%）<input name="volume" type="number" min="0" max="100" defaultValue={item?.volume ?? 100} required/></label>
